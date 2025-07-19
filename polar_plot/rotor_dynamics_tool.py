@@ -375,38 +375,19 @@ Total Range: {speed.min():.0f} - {speed.max():.0f} RPM"""
         plt.tight_layout()
         return fig
     
-    def create_comprehensive_analysis(self):
-        """Create a comprehensive analysis with multiple plots"""
+    def create_comprehensive_analysis(self, amplitude_percentile=25):
+        """Create polar plots analysis for all 3 bearings - heavily filtered for clean visualization
         
-        fig = plt.figure(figsize=(20, 15))
+        Parameters:
+        amplitude_percentile (float): Percentile threshold for amplitude filtering (default: 25)
+                                    Higher values = fewer points, cleaner plots
+                                    Lower values = more points, more detail
+        """
         
-        # Speed trend plot
-        ax1 = plt.subplot(2, 3, (1, 3))
-        time_data = self.data['time'].values
-        speed_data = self.data['engine_speed_rpm'].values
-        time_reduced, speed_reduced = self.reduce_data_rdp(time_data, speed_data, epsilon=50)
+        fig = plt.figure(figsize=(18, 6))
         
-        ax1.plot(time_data, speed_data, color='lightblue', alpha=0.6, linewidth=1)
-        ax1.plot(time_reduced, speed_reduced, color='navy', linewidth=3)
-        ax1.set_title('Engine Speed Trend', fontsize=14, fontweight='bold')
-        ax1.set_xlabel('Normalized Time')
-        ax1.set_ylabel('Engine Speed (RPM)')
-        ax1.grid(True, alpha=0.3)
-        
-        # Add phase regions
-        colors = ['lightgreen', 'lightyellow', 'lightcoral', 'lightpink', 'lightgray']
-        phase_names = ['Startup', 'Idle', 'Acceleration', 'Full Load', 'Shutdown']
-        
-        for i, (phase, (start, end)) in enumerate(self.engine_phases.items()):
-            ax1.axvspan(start, end, alpha=0.3, color=colors[i])
-            mid_point = (start + end) / 2
-            max_speed = max(speed_data)
-            ax1.text(mid_point, max_speed * 0.9, phase_names[i], 
-                    ha='center', va='center', fontsize=10, fontweight='bold',
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-        
-        # Polar plots for different bearings
-        bearing_positions = [(2, 3, 4), (2, 3, 5), (2, 3, 6)]
+        # Polar plots for different bearings (1x3 layout - no speed trend)
+        bearing_positions = [(1, 3, 1), (1, 3, 2), (1, 3, 3)]
         bearings = ['bearing_1', 'bearing_2', 'bearing_3']
         
         for i, (bearing, pos) in enumerate(zip(bearings, bearing_positions)):
@@ -419,21 +400,75 @@ Total Range: {speed.min():.0f} - {speed.max():.0f} RPM"""
             phase = self.data[phase_col].values
             speed = self.data['engine_speed_rpm'].values
             
-            # Apply RDP
-            x_cart = amplitude * np.cos(phase)
-            y_cart = amplitude * np.sin(phase)
-            x_reduced, y_reduced = self.reduce_data_rdp(x_cart, y_cart, epsilon=0.05)
+            # Filter based on amplitude to reduce crowding
+            # Only keep data points with significant amplitude (above specified percentile)
+            amp_threshold = np.percentile(amplitude, amplitude_percentile)
+            significant_mask = amplitude >= amp_threshold
+            
+            # Further filter to every 5th point to reduce density
+            step_mask = np.arange(len(amplitude)) % 5 == 0
+            
+            # Combine filters
+            filter_mask = significant_mask & step_mask
+            
+            # Apply filters
+            amp_filtered = amplitude[filter_mask]
+            phase_filtered = phase[filter_mask]
+            
+            # Apply RDP with higher epsilon for more aggressive reduction
+            x_cart = amp_filtered * np.cos(phase_filtered)
+            y_cart = amp_filtered * np.sin(phase_filtered)
+            x_reduced, y_reduced = self.reduce_data_rdp(x_cart, y_cart, epsilon=0.15)
             amp_reduced = np.sqrt(x_reduced**2 + y_reduced**2)
             phase_reduced = np.arctan2(y_reduced, x_reduced)
             
-            # Plot
-            scatter = ax.scatter(phase, amplitude, c=speed, cmap='viridis', alpha=0.3, s=15)
-            ax.scatter(phase_reduced, amp_reduced, c='red', s=40, alpha=0.8, marker='o')
-            ax.plot(phase_reduced, amp_reduced, 'r-', linewidth=2, alpha=0.7)
+            # Plot - lines only (no markers)
+            ax.plot(phase_reduced, amp_reduced, 'r-', linewidth=3, alpha=0.8, label='Filtered Trend')
             
-            ax.set_title(f'{bearing.replace("_", " ").title()} Balance', fontsize=12, fontweight='bold')
+            # Add 6 equally spaced points with speed numbers only (no text labels)
+            n_polar_points = len(amplitude)
+            
+            # Define 6 equally spaced indices (0%, 20%, 40%, 60%, 80%, 100%)
+            polar_indices = [
+                0,                              # 0% - Start
+                n_polar_points // 5,            # 20% 
+                2 * n_polar_points // 5,        # 40%
+                3 * n_polar_points // 5,        # 60%
+                4 * n_polar_points // 5,        # 80%
+                n_polar_points - 1              # 100% - End
+            ]
+            
+            # Colors and markers for the 6 points
+            colors = ['green', 'orange', 'blue', 'red', 'purple', 'gray']
+            markers = ['o', 's', '^', 'D', 'v', 'X']
+            
+            # Plot the 6 equally spaced points
+            max_amp = max(amplitude)
+            for j, idx in enumerate(polar_indices):
+                point_amp = amplitude[idx]
+                point_phase = phase[idx]
+                point_speed = speed[idx]
+                
+                # Plot marker
+                ax.scatter(point_phase, point_amp, c=colors[j], s=60, marker=markers[j], 
+                          edgecolor='black', linewidth=1, zorder=5, alpha=0.9)
+                
+                # Add speed number only (no text)
+                ax.annotate(f'{point_speed:.0f}', xy=(point_phase, point_amp), xytext=(point_phase, point_amp * 1.25),
+                           fontsize=8, fontweight='bold', ha='center', va='center',
+                           bbox=dict(boxstyle="round,pad=0.2", facecolor=colors[j], alpha=0.3))
+            
+            # Add data reduction info
+            original_points = len(amplitude)
+            filtered_points = len(amp_filtered)
+            final_points = len(amp_reduced)
+            
+            ax.set_title(f'{bearing.replace("_", " ").title()} Balance - 6 Speed Points\n({final_points} pts from {original_points}, ≥{amplitude_percentile}th percentile)', 
+                        fontsize=12, fontweight='bold')
             ax.set_theta_zero_location('E')
+            ax.set_ylim(0, max_amp * 1.4)  # Adjust for labels
             ax.grid(True, alpha=0.3)
+            # No legend needed since we're showing speed numbers only
         
         plt.tight_layout()
         return fig
